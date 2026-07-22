@@ -25,8 +25,6 @@ def preprocess(text):
 
 preprocessed_docs = [" ".join(preprocess(doc)) for doc in documents]
 
-preprocessed_docs
-
 vectorizer = TfidfVectorizer()
 tfidf_matrix = vectorizer.fit_transform(preprocessed_docs)
 

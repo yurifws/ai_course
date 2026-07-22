@@ -77,3 +77,6 @@ Desktop.ini
 logs/
 tmp/
 temp/
+
+# Whoosh search index
+index_dir/
