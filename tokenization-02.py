@@ -29,10 +29,20 @@ preprocessed_docs
 
 vectorizer = TfidfVectorizer()
 tfidf_matrix = vectorizer.fit_transform(preprocessed_docs)
-tfidf_matrix
 
 query = "machine learning"
-query_vector = vectorizer.transform([query])
-query_vector
 
-cosine_similarity(tfidf_matrix, query_vector).flatten()
+
+def search_tfidf(query, vectorizer, tfidf_matrix):
+    query_vector = vectorizer.transform([query])
+    similarities = cosine_similarity(tfidf_matrix, query_vector).flatten()
+    sorted_similarities = list(enumerate(similarities))
+    results = sorted(sorted_similarities, key=lambda x: x[1], reverse=True)
+    return results
+
+
+search_similarities = search_tfidf(query, vectorizer, tfidf_matrix)
+
+print(f"Top 10 documents similarity score {query}: ")
+for doc_index, score in search_similarities[:10]:
+    print(f"documento {doc_index}: {documents[doc_index]}")
