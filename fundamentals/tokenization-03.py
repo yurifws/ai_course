@@ -1,3 +1,6 @@
+# Boolean search over documents with Whoosh (an inverted index library).
+# Builds a local index and runs a query with AND logic.
+
 import os
 import shutil
 import nltk
@@ -7,10 +10,12 @@ from whoosh.qparser import QueryParser
 
 import warnings
 
+# Stopwords list used by the preprocess helper below.
 nltk.download("stopwords")
 
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
+# Corpus indexed and searched later.
 documents = [
     "Machine learning is a field of artificial intelligence that allows computers to learn patterns from data.",
     "Machine learning gives systems the ability to improve their performance without being explicitly programmed.",
@@ -27,6 +32,7 @@ documents = [
 
 
 def preprocess(text):
+    # Lowercase, tokenize, drop punctuation, then remove English stopwords.
     text_lower = text.lower()
     tokens = nltk.word_tokenize(text_lower)
     tokens = [word for word in tokens if word.isalnum()]
@@ -35,29 +41,36 @@ def preprocess(text):
     return tokens
 
 
+# Quick demo of preprocessing on a single sentence (result is not used further).
 text = "Machine learning is a field of artificial intelligence that allows computers to learn patterns from data."
 preprocess(text)
 
+# Recreate the index folder so each run starts from a clean index.
 if os.path.exists("index_dir"):
     shutil.rmtree("index_dir")
 os.mkdir("index_dir")
 
+# Schema: title is a unique ID; content is the searchable text we store.
 schema = Schema(title=ID(stored=True, unique=True), content=TEXT(stored=True))
 
 index = create_in("index_dir", schema)
 
+# Write every document into the index, then commit to disk.
 writter = index.writer()
 for i, doc in enumerate(documents):
     writter.add_document(title=str(i), content=doc)
 writter.commit()
 
+# Boolean query: both terms must appear in a matching document.
 query = "machine AND learning"
 
 
 def boolean_search(query, index):
+    # Parse the query string against the "content" field.
     parser = QueryParser("content", schema=index.schema)
     parsed_query = parser.parse(query)
 
+    # Search and return (title, content) for each hit.
     with index.searcher() as searcher:
         results = searcher.search(parsed_query)
         return [(hit["title"], hit["content"]) for hit in results]
