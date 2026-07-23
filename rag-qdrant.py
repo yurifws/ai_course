@@ -1,13 +1,14 @@
-# Simple RAG (Retrieval-Augmented Generation) demo.
-# 1) Embed documents  
-# 2) Retrieve the most similar ones for a query
+# RAG with Qdrant as the vector store (instead of scoring embeddings in plain Python).
+# 1) Embed documents and upsert them into Qdrant
+# 2) Retrieve the most similar ones for a query via vector search
 # 3) Ask an LLM to answer using only that retrieved context.
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
 from groq import Groq
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, PointStruct, VectorParams
+from sentence_transformers import SentenceTransformer
 
-# Small in-memory knowledge base (the "documents" we retrieve from).
+# Small knowledge base (the "documents" we retrieve from).
 documents = [
     "Machine learning is a field of artificial intelligence that allows computers to learn patterns from data.",
     "Machine learning gives systems the ability to improve their performance without being explicitly programmed.",
@@ -27,40 +28,48 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 # Groq client for the generation step (reads GROQ_API_KEY from the environment).
 client = Groq()
 
-# Precompute embeddings for every document once (cheaper than encoding on each query).
-doc_embeddings = model.encode(documents)
+# Vector DB client. ":memory:" keeps everything in RAM (lost when the process ends).
+qdrant = QdrantClient(":memory:")
+# path="db/data" persists vectors on disk so you can reuse them across runs.
+# qdrant = QdrantClient(path="db/data")
 
+# all-MiniLM-L6-v2 produces 384-dim vectors; Qdrant needs this to size the collection.
+vector_size = model.get_embedding_dimension()
 
-def cosine_similarity(a, b):
-    # Cosine similarity = how aligned two vectors are (1 = same direction, 0 = orthogonal).
-    # Parentheses matter: divide by (||a|| * ||b||), not only by ||a|| then multiply by ||b||.
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+# Create a collection: a named bucket of vectors with a fixed size + distance metric.
+# COSINE matches the similarity we used manually in rag.py.
+qdrant.create_collection(
+    collection_name="ml_documents",
+    vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+)
 
+# Build points: each document becomes an id + vector + payload (original text).
+points = []
 
-# Math python cosine similarity
-# v1 = np.array([1, 2, 3])
-# v2 = np.array([4, 5, 6])
-# dot_product = np.dot(v1, v2)
-# norm_euclidian = np.linalg.norm(v1) * np.linalg.norm(v2)
-# dot_product / norm_euclidian
+for idx, doc in enumerate(documents):
+    # Flat 1D list (not a nested [[...]]); Qdrant expects one vector per point.
+    embedding = model.encode(doc).tolist()
+    points.append(PointStruct(id=idx, vector=embedding, payload={"text": doc}))
+
+# wait=True blocks until the upsert is fully applied before we search.
+qdrant.upsert(collection_name="ml_documents", points=points, wait=True)
 
 
 def retrieve(query, top_k=3):
     # Encode the query into the same vector space as the documents.
-    query_embedding = model.encode([query])[0]
+    # Pass a single string (not [query]) so we get a flat vector, not a multivector.
+    query_embedding = model.encode(query).tolist()
 
-    similarities = []
-
-    # Score every document against the query.
-    for i, doc_emb in enumerate(doc_embeddings):
-        sim = cosine_similarity(query_embedding, doc_emb)
-        similarities.append((i, sim))
-
-    # Highest similarity first.
-    similarities.sort(key=lambda x: x[1], reverse=True)
-
-    # Return the top_k documents with their scores.
-    return [(documents[i], sim) for i, sim in similarities[:top_k]]
+    # Qdrant finds the nearest neighbors; no manual cosine loop needed.
+    search_result = qdrant.query_points(
+        collection_name="ml_documents",
+        query=query_embedding,
+        limit=top_k,
+        # Include the original text stored in payload (not just scores/ids).
+        with_payload=True,
+    )
+    # Return (text, similarity score) pairs, same shape as rag.py's retrieve().
+    return [(hit.payload["text"], hit.score) for hit in search_result.points]
 
 
 def generate_answer(query, retrieve_docs):
