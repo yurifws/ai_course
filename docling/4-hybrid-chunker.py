@@ -29,12 +29,17 @@ document = result.document
 
 # Wrap the HF tokenizer so Docling can count tokens with our MAX_TOKENS cap.
 tokenizer = HuggingFaceTokenizer(
-    tokenizer=AutoTokenizer.from_pretrained(EMBED_MODEL), max_tokens=MAX_TOKENS
+    tokenizer=AutoTokenizer.from_pretrained(EMBED_MODEL),
+    max_tokens=MAX_TOKENS,
 )
 
 # merge_peers=True: adjacent small chunks under the same parent can be merged
 # when that still fits within MAX_TOKENS (fewer, denser chunks for RAG).
-chunker = HybridChunker(tokenizer=tokenizer, max_tokens=MAX_TOKENS, merge_peers=True)
+chunker = HybridChunker(
+    tokenizer=tokenizer,
+    max_tokens=MAX_TOKENS,
+    merge_peers=True,
+)
 
 # Materialize the generator into a list so we can index and inspect chunks.
 chunks = list(chunker.chunk(document))
