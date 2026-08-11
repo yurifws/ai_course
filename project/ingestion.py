@@ -1,5 +1,5 @@
 # Ingest a financial Markdown file into Qdrant for hybrid RAG.
-# 1) Split the file into paragraph chunks
+# 1) Semantically chunk the file (embed paragraphs → HDBSCAN clusters → token packs)
 # 2) Embed each chunk with dense (semantic) + sparse (BM25) + ColBERT (late interaction)
 # 3) Upsert all three into Qdrant
 # 4) Hybrid search: dense+sparse candidates fused with RRF, then ColBERT re-ranks the top hits
@@ -14,6 +14,7 @@ from fastembed import (
     LateInteractionTextEmbedding,
 )
 from qdrant_client import QdrantClient, models
+from utils.semantic_chunker import SemanticChunker
 
 # Load QDRANT_URL / QDRANT_API_KEY (and any other secrets) from .env.
 load_dotenv()
@@ -30,6 +31,8 @@ COLBERT_MODEL = "colbert-ir/colbertv2.0"
 COLLECTION_NAME = "financial"
 # Local Markdown source (e.g. an Apple 10-K Item 1A risk-factors excerpt).
 FILE_PATH = "project/AAPL_10-K_1A_temp.md"
+# Soft token budget per semantic chunk (passed to SemanticChunker).
+MAX_TOKENS = 300
 
 # Cloud Qdrant client (URL + API key from the environment).
 qdrant = QdrantClient(
@@ -63,9 +66,9 @@ qdrant.create_collection(
 with open(FILE_PATH, "r", encoding="utf-8") as f:
     content = f.read()
 
-# Naive chunking: split on blank lines, keep paragraphs long enough to be useful.
-paragraphs = content.split("\n\n")
-chunks = [p.strip() for p in paragraphs if len(p.strip()) > 50]
+# Cluster related paragraphs by meaning, then pack under MAX_TOKENS.
+chunker = SemanticChunker(max_tokens=MAX_TOKENS)
+chunks = chunker.create_chunks(content)
 
 # Three encoders for hybrid retrieval:
 # - dense (MiniLM): semantic similarity — paraphrases / related meaning
@@ -145,7 +148,7 @@ max_score = max(result.score for result in results.points)
 
 # Inspect the top hits: ColBERT re-rank score and a short preview of each chunk.
 for r in results.points:
-    nomalized_score = r.score / max_score
-    print(f"Score: {nomalized_score}")
+    normalized_score = r.score / max_score
+    print(f"Score: {normalized_score}")
     print(f"Text: {r.payload['text'][:100]}...")
     print("-" * 80)
