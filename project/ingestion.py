@@ -35,12 +35,15 @@ FILE_PATH = "project/AAPL_10-K_1A_temp.md"
 MAX_TOKENS = 300
 
 # Cloud Qdrant client (URL + API key from the environment).
+# ColBERT multi-vectors are large payloads; raise timeout past the 5s default.
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
     api_key=os.getenv("QDRANT_API_KEY"),
+    timeout=120,
 )
 
 # Recreate the collection so each run starts clean (demo-friendly, not production).
+# delete first — create_collection fails if the named collection already exists.
 qdrant.delete_collection(COLLECTION_NAME)
 # Named vectors:
 # - "dense": single 384-d cosine vector (semantic)
@@ -49,8 +52,10 @@ qdrant.delete_collection(COLLECTION_NAME)
 qdrant.create_collection(
     collection_name=COLLECTION_NAME,
     vectors_config={
+        # size= must match the dense model output dim (MiniLM-L6 = 384).
         "dense": models.VectorParams(size=384, distance=models.Distance.COSINE),
         "colbert": models.VectorParams(
+            # ColBERTv2 token vectors are 128-d; MaxSim = late-interaction score.
             size=128,
             distance=models.Distance.COSINE,
             # Multi-vector: each point stores many token vectors; MaxSim picks best matches.
@@ -59,6 +64,7 @@ qdrant.create_collection(
             ),
         ),
     },
+    # Sparse lives outside vectors_config — Qdrant treats it as an inverted index.
     sparse_vectors_config={"sparse": models.SparseVectorParams()},
 )
 
@@ -89,6 +95,7 @@ for chunk in chunks:
     colbert_embedding = list(colbert_model.passage_embed([chunk]))[0].tolist()
 
     point = models.PointStruct(
+        # Qdrant point ids must be UUID or unsigned int — string UUID is fine.
         id=str(uuid.uuid4()),
         # Must use the same names as vectors_config / sparse_vectors_config above.
         vector={
@@ -101,10 +108,15 @@ for chunk in chunks:
     )
     points.append(point)
 
-# Upload all chunk vectors + payloads into the collection.
-qdrant.upload_points(collection_name=COLLECTION_NAME, points=points)
+# Upload in small batches: each ColBERT point holds many token vectors.
+# batch_size=4 avoids WriteTimeout on cloud when payloads are large.
+qdrant.upload_points(
+    collection_name=COLLECTION_NAME,
+    points=points,
+    batch_size=4,
+)
 
-# Sample hybrid search: embed the question with all three query encoders.
+# Demo query — same pipeline you would run at search time after ingest.
 query_text = "what are the main financial risks?"
 
 # query_embed (not passage_embed) is the asymmetric counterpart for search queries.
@@ -124,6 +136,7 @@ results = qdrant.query_points(
         models.Prefetch(
             prefetch=[
                 # using= must match the named vectors created in create_collection.
+                # limit=10: how many candidates each channel contributes before fusion.
                 models.Prefetch(query=query_dense, using="dense", limit=10),
                 models.Prefetch(
                     # ** unpacks {"indices", "values"} into SparseVector fields.
@@ -133,6 +146,7 @@ results = qdrant.query_points(
                 ),
             ],
             # RRF merges the two ranked lists without needing comparable raw scores.
+            # limit=20: fused shortlist size passed to ColBERT re-rank.
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=20,
         ),
@@ -150,5 +164,7 @@ max_score = max(result.score for result in results.points)
 for r in results.points:
     normalized_score = r.score / max_score
     print(f"Score: {normalized_score}")
+    # Truncate payload text so the console stays readable.
     print(f"Text: {r.payload['text'][:100]}...")
     print("-" * 80)
+
