@@ -1,17 +1,25 @@
+# Tool-calling agent loop with Groq via the OpenAI SDK Responses API.
+# The model may request get_stock; we run it locally and send the result back.
+
 import json
 
 import yfinance as yf
 from dotenv import load_dotenv
 from openai import OpenAI
 
+# Load GROQ_API_KEY / OPENAI_API_KEY from .env into the environment.
 load_dotenv()
 
+# OpenAI client pointed at Groq's OpenAI-compatible endpoint (not api.openai.com).
 client = OpenAI(base_url="https://api.groq.com/openai/v1")
 
+# Prefer a Groq model that emits valid OpenAI-style tool calls.
+# llama-3.1-8b-instant often fails with tool_use_failed (emits <function=...> XML).
 MODEL = "openai/gpt-oss-20b"
 
 
 def get_stock(ticker: str):
+    # Local tool: fetch basic quote fields from Yahoo Finance.
     stock = yf.Ticker(ticker)
     info = stock.info
     output = {
@@ -24,6 +32,7 @@ def get_stock(ticker: str):
     return json.dumps(output)
 
 
+# Tool schema advertised to the model (Responses API function tool format).
 tools = [
     {
         "type": "function",
@@ -42,16 +51,20 @@ tools = [
     },
 ]
 
+# Conversation so far: only the user question.
 input_list = [{"role": "user", "content": "What is the stock price of Apple?"}]
 
+# First turn: model may emit a function_call instead of a final answer.
 response = client.responses.create(
     model=MODEL,
     tools=tools,
     input=input_list,
 )
 
+# Keep the model's output (including function_call items) in the conversation.
 input_list += response.output
 
+# Run each requested tool locally and append function_call_output messages.
 for item in response.output:
     if item.type == "function_call":
         args = json.loads(item.arguments)
@@ -64,6 +77,7 @@ for item in response.output:
             }
         )
 
+# Second turn: model answers using the tool results.
 final_response = client.responses.create(
     model=MODEL,
     input=input_list,
